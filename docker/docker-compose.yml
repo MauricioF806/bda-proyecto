@@ -1,27 +1,36 @@
-
 services:
+  tablespaces-init:
+    image: busybox:1.36
+    container_name: empleados-tablespaces-init
+    user: root
+    # 999:999 es el usuario postgres de la imagen oficial
+    command: >
+      sh -c "mkdir -p /ts/ts_datos /ts/ts_historico /ts/ts_indices /ts/ts_auditoria &&
+             chown -R 999:999 /ts && chmod -R 700 /ts"
+    volumes:
+      - empleados_tablespaces:/ts
+
   postgres:
     image: postgres:16
     container_name: empleados-postgres
     restart: unless-stopped
-
+    depends_on:
+      tablespaces-init:
+        condition: service_completed_successfully
+    command: ["postgres", "-c", "shared_preload_libraries=pg_stat_statements"]
     env_file:
       - ../.env
-
     environment:
       POSTGRES_DB: empleados_db
       POSTGRES_USER: admin_empleados
-
     ports:
       - "5433:5432"
-
     volumes:
       - empleados_pgdata:/var/lib/postgresql/data
       - empleados_tablespaces:/var/lib/postgresql/tablespaces
-
+      - ./init:/docker-entrypoint-initdb.d:ro
     networks:
       - empleados_network
-
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U admin_empleados -d empleados_db"]
       interval: 10s
