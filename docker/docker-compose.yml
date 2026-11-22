@@ -1,0 +1,38 @@
+
+services:
+  postgres:
+    image: postgres:16
+    container_name: empleados-postgres
+    restart: unless-stopped
+
+    env_file:
+      - ../.env
+
+    environment:
+      POSTGRES_DB: empleados_db
+      POSTGRES_USER: admin_empleados
+
+    ports:
+      - "5433:5432"
+
+    volumes:
+      - empleados_pgdata:/var/lib/postgresql/data
+      - empleados_tablespaces:/var/lib/postgresql/tablespaces
+
+    networks:
+      - empleados_network
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin_empleados -d empleados_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  empleados_pgdata:
+  empleados_tablespaces:
+
+networks:
+  empleados_network:
+    name: empleados_network
+    driver: bridge

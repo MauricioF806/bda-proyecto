@@ -1,0 +1,28 @@
+
+# Variables de entorno y credenciales
+.env
+.env.*
+
+# Archivos temporales
+*.log
+*.tmp
+*.bak
+
+# Respaldos de bases de datos
+*.dump
+*.backup
+*.sql.gz
+
+# Datos locales de PostgreSQL
+postgres_data/
+tablespace_data/
+
+# Archivos del sistema
+.DS_Store
+Thumbs.db
+
+# Entornos locales
+.venv/
+__pycache__/
+# Permitir compartir la plantilla de configuración
+!.env.example
