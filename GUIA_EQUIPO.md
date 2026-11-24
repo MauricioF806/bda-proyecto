@@ -6,7 +6,8 @@ Proyecto de Bases de Datos Avanzadas: Diseño, Seguridad y Optimización de un S
 
 - Actividad 1 (diseño con tablas particionadas y tablespaces): terminada y documentada.
 - Actividad 2 (seguridad multinivel, vista y trigger de auditoría): terminada y documentada.
-- Pendientes: actividad 3 (carga masiva y optimización), actividad 4 (almacenamiento), actividad 5 (reporte final) y la presentación.
+- Actividad 3 (carga masiva, planes de ejecución, índices, parámetros y advisor): scripts 05 a 11, probados de punta a punta.
+- Pendientes: actividad 4 (almacenamiento), actividad 5 (reporte final) y la presentación.
 
 ## Cómo levantar el entorno
 
@@ -65,17 +66,64 @@ Se ejecutan desde la raíz del repo con:
 
     docker exec -i empleados-postgres psql -U admin_empleados -d empleados_db < scripts/NOMBRE.sql
 
+En PowerShell `<` no funciona y además los acentos se dañan al pasar el archivo por una tubería. Ahí conviene copiar la carpeta al contenedor (repetir la copia si se modifica algún script) y ejecutar con `-f`:
+
+    [Console]::OutputEncoding = [Text.Encoding]::UTF8
+    docker cp scripts/. empleados-postgres:/tmp/scripts
+    docker exec empleados-postgres psql -U admin_empleados -d empleados_db -f /tmp/scripts/NOMBRE.sql
+
 - `01_verificar_ubicaciones.sql`: muestra en qué tablespace quedó cada objeto.
 - `02_prueba_particiones.sql`: prueba el enrutamiento de particiones. Termina con `TRUNCATE`.
 - `03_datos_demo_seguridad.sql`: carga seis empleados de demostración. Empieza con `TRUNCATE` de todas las tablas.
 - `04_pruebas_seguridad.sql`: pruebas de acceso, modificación y auditoría cambiando de rol, incluida la cesión de permisos con `WITH GRANT OPTION` y `REVOKE ... CASCADE` (DAC), intentos de evadir RLS o de alterar la bitácora, y la auditoría de nómina. Los `permission denied` son el resultado esperado.
 
-## Advertencias para la actividad 3
+## Actividad 3: optimización y afinación (scripts 05 a 11)
 
-- Los scripts 02 y 03 vacían las tablas. No ejecutarlos después de la carga masiva. Antes de cargar, hay que vaciar los datos de demostración.
-- Los triggers `trg_auditar_empleados` y `trg_auditar_nomina` registran cada fila insertada en `empleados` y `nomina`. Una carga de 50,000 registros generará 50,000 entradas en la bitácora (más las de nómina) y será más lenta. Hay que decidir si se desactiva durante la carga y comprobar si `ALTER TABLE ... DISABLE TRIGGER` alcanza a las particiones.
-- RLS está activo en `empleados`: cargar y consultar como `admin_empleados` o `usr_admin`, porque un analista solo verá las filas de su nivel. Los empleados nuevos deben repartirse entre los niveles de clasificación 1, 2 y 3.
-- No hay índices secundarios a propósito. Para la comparación antes/después, medir primero con `EXPLAIN (ANALYZE, BUFFERS)` y solo después crear o recrear índices.
-- `pg_stat_statements` ya está precargado en el servidor, pero falta ejecutar `CREATE EXTENSION pg_stat_statements;` en la base.
-- `DB_BLOCK_SIZE` no existe en PostgreSQL (el tamaño de bloque se fija al compilar). Los parámetros ajustables son, por ejemplo, `shared_buffers`, `work_mem`, `effective_cache_size`, `maintenance_work_mem` y `random_page_cost`.
+Todos se ejecutan como `admin_empleados`, en este orden y una sola vez. Antes de empezar conviene partir de una base recién creada (`docker compose down -v` y `up -d`) para que la medición base no tenga índices ni parámetros de pruebas anteriores. Los scripts 02, 03 y 04 son de las actividades 1 y 2: no ejecutarlos después de la carga masiva (02 y 03 vacían las tablas y 04 busca los empleados de demostración).
+
+| Script | Qué hace | Requisito del PDF |
+|---|---|---|
+| `05_carga_masiva.sql` | Procedimiento PL/pgSQL `rrhh.sp_carga_masiva`: 12 departamentos, 15 puestos, 50,000 empleados (ciclo fila por fila) y ~818,000 pagos de nómina (una sentencia orientada a conjuntos). Semilla fija: siempre genera los mismos datos. Tarda ~30 s. | Carga masiva con PL/SQL |
+| `06_mediciones_base.sql` | Crea el esquema `dba` con 4 consultas complejas, la función `dba.medir(etapa)` y la función `dba.plan(n)`. Mide la línea base sin índices. | EXPLAIN PLAN / DBMS_XPLAN |
+| `07_advisor.sql` | Vista `dba.v_advisor` (hallazgos + recomendaciones) y función `dba.aplicar_recomendaciones(categoria)`. | DBA_ADVISOR_FINDINGS / RECOMMENDATIONS |
+| `08_indices.sql` | Aplica automáticamente los índices que recomendó el advisor y un índice por apellido. Mide. | Crear índices, aplicar el advisor |
+| `09_recrear_indices.sql` | Borra y recrea índices mejorados (compuesto, covering con `INCLUDE`, parcial con `WHERE activo`). Mide y compara tamaños. | Modificar y recrear índices |
+| `10_parametros.sql` | `block_size` (equivalente a DB_BLOCK_SIZE, solo lectura) y `ALTER SYSTEM` de `shared_buffers`, `work_mem`, `maintenance_work_mem`, `effective_cache_size`, `random_page_cost`, `effective_io_concurrency`. | Parámetros críticos |
+| (reiniciar) | `docker restart empleados-postgres`: `shared_buffers` solo cambia al reiniciar. | |
+| `11_comparativo.sql` | Medición final, comparativo de las 4 etapas, advisor final y borrado de índices sin uso. | Análisis antes/después |
+
+Consultas útiles durante la presentación:
+
+    SELECT * FROM dba.v_comparativo;          -- costo y tiempo de cada consulta en cada etapa, con % contra la base
+    SELECT * FROM dba.plan(3);                -- plan real de la consulta 3 (equivalente a DBMS_XPLAN.DISPLAY_CURSOR)
+    SELECT * FROM dba.v_advisor;              -- hallazgos y recomendaciones vigentes
+    SELECT * FROM dba.v_indices;              -- tamaño y uso de cada índice
+    SELECT * FROM dba.consultas;              -- texto y objetivo de las 4 consultas
+
+Resultados de referencia (una corrida de prueba; los tiempos varían según el equipo, los costos no):
+
+| Consulta | Línea base | Índices simples | Índices recreados | Parámetros |
+|---|---|---|---|---|
+| 1. Nómina por departamento y trimestre | 8,588 / 104 ms | 8,588 / 130 ms | 8,588 / 112 ms | 8,588 / 104 ms |
+| 2. Sobre el promedio de su puesto | 1,808 / 7.1 ms | 1,300 / 5.6 ms | 1,300 / 4.8 ms | 1,151 / 4.7 ms |
+| 3. Historial de pagos por nombre | 16,852 / 60 ms | 3,341 / 7.5 ms | 1,045 / 1.3 ms | 397 / 1.3 ms |
+| 4. Top 20 de bonos | 53,128 / 255 ms | 52,620 / 317 ms | 45,580 / 265 ms | 22,512 / 319 ms |
+
+(costo estimado / tiempo real promedio)
+
+Cómo leerlos (útil para la conclusión del reporte):
+
+- **Consulta 3**: es la que más gana (−98 % de tiempo). Pasa de recorrer las ~818,000 filas de nómina a un `Nested Loop` con *index-only scan* sobre el covering index.
+- **Consulta 1**: ningún índice la mejora, y es correcto. Lee una partición completa (`nomina_2025`) gracias a la poda de particiones; un índice no ayuda cuando se lee toda la partición.
+- **Consulta 2**: con `random_page_cost = 4` el optimizador ignora el índice parcial. Con 1.1 (valor para SSD) lo usa. Así un parámetro cambia el plan.
+- **Consulta 4**: con `work_mem = 4MB` la agregación escribe ~2,300 bloques temporales a disco; con 32MB se resuelve en memoria (`bloques_temp = 0`). Su costo estimado baja 58 %, pero el tiempo no mejora: el costo es una estimación del optimizador, no una medida de tiempo.
+- Las diferencias de unos pocos milisegundos entre corridas son ruido (caché, otros procesos del equipo).
+- Al final siguen dos hallazgos `CONSULTA_COSTOSA` (consultas 1 y 4) y uno de `ACCESO_SECUENCIAL` en empleados: son consultas que agregan una partición completa o casi toda la nómina, por lo que su recorrido secuencial es el plan correcto.
+
+Notas técnicas:
+
+- La carga desactiva los triggers de auditoría (sí alcanza a las particiones) dentro de la misma transacción; si algo falla, el `ROLLBACK` los deja activos. La bitácora registra la carga como un único evento con el total de filas.
+- RLS sigue activo: tras la carga, `usr_analista1` ve 29,915 empleados, `usr_analista2` 44,917 y `usr_admin` los 50,000. El esquema `dba` solo es accesible para `rol_admin`.
+- `dba.medir` ejecuta cada consulta una vez para calentar la caché y luego 3 veces con `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)`; guarda el promedio de tiempo, el costo y el plan completo en `dba.mediciones`. Volver a medir una etapa reemplaza sus resultados.
+- `DB_BLOCK_SIZE` no existe en PostgreSQL: el tamaño de bloque (`block_size = 8192`) se fija al compilar el servidor.
 - Convención de documentación: el código va como texto y los resultados como capturas, con figuras numeradas.
