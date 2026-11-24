@@ -1,3 +1,7 @@
+# Nombre fijo del proyecto: sin esto Docker usa el nombre de la carpeta ("docker")
+# y lo mezcla con cualquier otro proyecto que viva en una carpeta "docker"
+name: bda-proyecto
+
 services:
   tablespaces-init:
     image: busybox:1.36

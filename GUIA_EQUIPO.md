@@ -19,6 +19,16 @@ Requisitos: Docker Desktop y Git.
 
 La primera vez, los scripts de `docker/init` se ejecutan automáticamente en orden: tablespaces (01), esquema (02), roles y privilegios (03), seguridad por fila (04), auditoría (05) y endurecimiento de la auditoría (06). Solo corren cuando el volumen de datos está vacío. `docker compose down -v` borra los volúmenes y todos los datos, y vuelve a ejecutar los scripts desde cero.
 
+El proyecto de compose se llama `bda-proyecto` (definido con `name:` en `docker-compose.yml`), y así aparece en Docker Desktop. Antes tomaba el nombre de la carpeta (`docker`) y se mezclaba con otros proyectos guardados en carpetas `docker`. Quien ya lo había levantado antes del cambio debe hacer, desde `docker`:
+
+    docker rm -f empleados-postgres empleados-tablespaces-init   # contenedores viejos (los volúmenes quedan)
+    docker network rm empleados_network                          # estaba etiquetada con el proyecto viejo
+    docker compose up -d                                         # crea bda-proyecto con volúmenes nuevos y vacíos
+
+(No usar `docker compose -p docker down`: podría afectar otros proyectos que también se llamen `docker`.)
+
+y luego volver a cargar los datos de prueba con `03_datos_demo_seguridad.sql`. Los volúmenes viejos (`docker_empleados_pgdata` y `docker_empleados_tablespaces`) se pueden borrar con `docker volume rm`.
+
 ## Conectarse
 
 En Git Bash (Windows):
