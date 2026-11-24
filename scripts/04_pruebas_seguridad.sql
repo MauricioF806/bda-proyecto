@@ -47,3 +47,50 @@ FROM rrhh.v_auditoria_empleados
 WHERE usuario_bd = 'usr_admin'
 ORDER BY id_auditoria;
 RESET ROLE;
+
+\echo '=== 5. DAC: GRANT WITH GRANT OPTION y REVOKE en cascada ==='
+GRANT SELECT ON rrhh.departamentos TO usr_analista2 WITH GRANT OPTION;
+SET ROLE usr_analista2;
+\echo '--- El analista 2 cede por su cuenta el permiso al auditor'
+GRANT SELECT ON rrhh.departamentos TO usr_auditor;
+RESET ROLE;
+SET ROLE usr_auditor;
+\echo '--- Ahora el auditor si puede leer departamentos'
+SELECT nombre FROM rrhh.departamentos ORDER BY id_departamento;
+RESET ROLE;
+REVOKE SELECT ON rrhh.departamentos FROM usr_analista2 CASCADE;
+SET ROLE usr_auditor;
+\echo '--- Debe fallar: el REVOKE en cascada le quito el permiso al auditor'
+SELECT nombre FROM rrhh.departamentos;
+RESET ROLE;
+
+\echo '=== 6. Intentos de evadir MAC o escalar privilegios (deben fallar) ==='
+SET ROLE usr_analista1;
+\echo '--- Leer una particion directamente (saltarse RLS)'
+SELECT id_empleado FROM rrhh.empleados_p0;
+\echo '--- Subirse el nivel de autorizacion'
+UPDATE rrhh.autorizacion_usuario SET nivel_autorizacion = 3 WHERE usuario = current_user;
+\echo '--- Solo ve su propia fila de autorizacion'
+SELECT * FROM rrhh.autorizacion_usuario;
+RESET ROLE;
+SET ROLE usr_admin;
+\echo '--- TRUNCATE se saltaria el trigger: denegado'
+TRUNCATE rrhh.empleados;
+TRUNCATE rrhh.auditoria_empleados;
+\echo '--- Fabricar un registro falso en la bitacora: denegado'
+INSERT INTO rrhh.auditoria_empleados (tabla_afectada, operacion) VALUES ('empleados', 'I');
+RESET ROLE;
+
+\echo '=== 7. Auditoria de nomina y del usuario real ==='
+SET ROLE usr_admin;
+UPDATE rrhh.nomina SET bonos = bonos + 500
+WHERE id_empleado = (SELECT id_empleado FROM rrhh.empleados WHERE email = 'marta.perez@demo.mx');
+RESET ROLE;
+SET ROLE usr_auditor;
+SELECT id_auditoria, tabla_afectada, usuario_bd, usuario_sesion, operacion, id_empleado,
+       datos_anteriores->>'bonos' AS bonos_anterior,
+       datos_nuevos->>'bonos' AS bonos_nuevo
+FROM rrhh.v_auditoria_empleados
+WHERE tabla_afectada = 'nomina' AND operacion = 'UPDATE'
+ORDER BY id_auditoria;
+RESET ROLE;

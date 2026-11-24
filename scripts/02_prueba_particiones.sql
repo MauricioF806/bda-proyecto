@@ -6,4 +6,10 @@ INSERT INTO rrhh.nomina (id_empleado, fecha_pago, salario_base) VALUES (1, '2023
 
 SELECT tableoid::regclass AS particion, id_pago, id_empleado, fecha_pago FROM rrhh.nomina ORDER BY fecha_pago;
 
+-- Reparto por HASH de empleados: se agregan 19 empleados más y se cuentan por partición
+INSERT INTO rrhh.empleados (nombre, apellido_paterno, email, fecha_contratacion, salario, id_departamento, id_rol)
+SELECT 'Prueba' || g, 'Hash', 'prueba' || g || '@ejemplo.com', DATE '2024-01-01', 20000, 1, 1
+FROM generate_series(1, 19) AS g;
+SELECT tableoid::regclass AS particion, count(*) AS empleados FROM rrhh.empleados GROUP BY 1 ORDER BY 1;
+
 TRUNCATE rrhh.nomina, rrhh.empleados, rrhh.roles_laborales, rrhh.departamentos RESTART IDENTITY CASCADE;
