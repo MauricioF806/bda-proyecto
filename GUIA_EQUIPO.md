@@ -73,13 +73,13 @@ En PowerShell `<` no funciona y además los acentos se dañan al pasar el archiv
     docker exec empleados-postgres psql -U admin_empleados -d empleados_db -f /tmp/scripts/NOMBRE.sql
 
 - `01_verificar_ubicaciones.sql`: muestra en qué tablespace quedó cada objeto.
-- `02_prueba_particiones.sql`: prueba el enrutamiento de particiones. Termina con `TRUNCATE`.
+- `02_prueba_particiones.sql`: prueba el enrutamiento de particiones (RANGE en nómina, incluida la partición DEFAULT, y HASH en empleados) y la poda de particiones. Corre dentro de una transacción que termina en `ROLLBACK`: no borra ni deja datos, así que funciona antes o después de la carga masiva.
 - `03_datos_demo_seguridad.sql`: carga seis empleados de demostración. Empieza con `TRUNCATE` de todas las tablas.
 - `04_pruebas_seguridad.sql`: pruebas de acceso, modificación y auditoría cambiando de rol, incluida la cesión de permisos con `WITH GRANT OPTION` y `REVOKE ... CASCADE` (DAC), intentos de evadir RLS o de alterar la bitácora, y la auditoría de nómina. Los `permission denied` son el resultado esperado.
 
 ## Actividad 3: optimización y afinación (scripts 05 a 11)
 
-Todos se ejecutan como `admin_empleados`, en este orden y una sola vez. Antes de empezar conviene partir de una base recién creada (`docker compose down -v` y `up -d`) para que la medición base no tenga índices ni parámetros de pruebas anteriores. Los scripts 02, 03 y 04 son de las actividades 1 y 2: no ejecutarlos después de la carga masiva (02 y 03 vacían las tablas y 04 busca los empleados de demostración).
+Todos se ejecutan como `admin_empleados`, en este orden y una sola vez. Antes de empezar conviene partir de una base recién creada (`docker compose down -v` y `up -d`) para que la medición base no tenga índices ni parámetros de pruebas anteriores. De los scripts de las actividades 1 y 2, el 01 y el 02 se pueden ejecutar en cualquier momento. El 03 reemplaza los 50,000 empleados por los 6 de demostración, y el 04 necesita esos 6. Para repetir la demostración de seguridad después de la carga: ejecutar 03 y 04, y luego 05 para recuperar exactamente los mismos datos masivos (~30 s); las mediciones guardadas en `dba` no se pierden.
 
 | Script | Qué hace | Requisito del PDF |
 |---|---|---|
