@@ -7,7 +7,8 @@ Proyecto de Bases de Datos Avanzadas: Diseño, Seguridad y Optimización de un S
 - Actividad 1 (diseño con tablas particionadas y tablespaces): terminada y documentada.
 - Actividad 2 (seguridad multinivel, vista y trigger de auditoría): terminada y documentada.
 - Actividad 3 (carga masiva, planes de ejecución, índices, parámetros y advisor): scripts 05 a 11, probados de punta a punta.
-- Pendientes: actividad 4 (almacenamiento), actividad 5 (reporte final) y la presentación.
+- Actividad 4 (monitoreo de almacenamiento, ajustes dinámicos y mantenimiento automático): scripts 12 a 15 y el contenedor `empleados-mantenimiento`, probados de punta a punta.
+- Pendientes: actividad 5 (reporte final) y la presentación.
 
 ## Cómo levantar el entorno
 
@@ -126,4 +127,64 @@ Notas técnicas:
 - RLS sigue activo: tras la carga, `usr_analista1` ve 29,915 empleados, `usr_analista2` 44,917 y `usr_admin` los 50,000. El esquema `dba` solo es accesible para `rol_admin`.
 - `dba.medir` ejecuta cada consulta una vez para calentar la caché y luego 3 veces con `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)`; guarda el promedio de tiempo, el costo y el plan completo en `dba.mediciones`. Volver a medir una etapa reemplaza sus resultados.
 - `DB_BLOCK_SIZE` no existe en PostgreSQL: el tamaño de bloque (`block_size = 8192`) se fija al compilar el servidor.
+
+## Actividad 4: gestión avanzada de almacenamiento (scripts 12 a 15)
+
+Se ejecutan como `admin_empleados`, en orden, de preferencia después de la carga masiva (05). No dependen de los scripts 06 a 11.
+
+| Script | Qué hace | Requisito del PDF |
+|---|---|---|
+| `12_monitoreo_almacenamiento.sql` | Crea las vistas de monitoreo, las cuotas por tablespace, la configuración de umbrales y la bitácora de mantenimiento. Muestra un reporte completo. | Monitorear tablespaces y archivos de datos |
+| `13_ajustes_dinamicos.sql` | Crea los procedimientos de particiones, ciclo de vida y retención, y los demuestra paso a paso: alerta por cuota, mover a histórico, ampliar cuota, pago en DEFAULT, crear particiones futuras, truncado (con `ROLLBACK`) y archivado (con reintegración). Al terminar, los datos quedan como estaban. | Ajustes dinámicos (autoextensión, particiones) y truncado |
+| `14_simular_fragmentacion.sql` | Actualiza dos veces la mitad de los pagos del año pasado (sin cambiar los datos) para fragmentar la partición y sus índices. | Prepara la demostración del rebuild |
+| `15_mantenimiento_automatico.sql` | La rutina automática: particiones futuras, ciclo de vida, retención (opcional), rebuild de tablas (`VACUUM FULL`) y de índices (`REINDEX CONCURRENTLY`). | Mantenimiento automático (rebuild de particiones e índices) |
+
+Equivalencias con Oracle:
+
+| Oracle | Aquí |
+|---|---|
+| `DBA_TABLESPACES`, `DBA_DATA_FILES`, `DBA_FREE_SPACE` | `dba.v_tablespaces` (tamaño, objetos, cuota, disco libre y estado) |
+| `AUTOEXTEND ON MAXSIZE n` | `dba.cuotas_tablespace`. En PostgreSQL los archivos crecen solos hasta llenar el disco; la cuota es un límite lógico que genera alerta |
+| `DBA_TAB_PARTITIONS` | `dba.v_particiones` |
+| `DBMS_SPACE`, `ANALYZE INDEX ... VALIDATE STRUCTURE` | `dba.v_salud_tablas` y `dba.v_salud_indices` (extensión `pgstattuple`) |
+| Alertas de espacio | `dba.v_alertas_almacenamiento` (con la acción recomendada) |
+| `ADD PARTITION` / `SPLIT PARTITION` de DEFAULT | `CALL dba.sp_crear_particiones_futuras(n)` |
+| `MOVE PARTITION ... TABLESPACE` | `CALL dba.sp_mover_a_historico(n)` |
+| `TRUNCATE PARTITION` / `EXCHANGE PARTITION` | `CALL dba.sp_retencion(n, 'TRUNCAR' \| 'ARCHIVAR')` |
+| `ALTER TABLE ... MOVE` / `ALTER INDEX ... REBUILD ONLINE` | `VACUUM (FULL, ANALYZE)` / `REINDEX INDEX CONCURRENTLY` |
+| Job de `DBMS_SCHEDULER` | Contenedor `empleados-mantenimiento` |
+
+Consultas útiles durante la presentación:
+
+    SELECT * FROM dba.v_tablespaces;
+    SELECT * FROM dba.v_particiones ORDER BY tabla, particion;
+    SELECT * FROM dba.v_alertas_almacenamiento;
+    SELECT * FROM dba.v_salud_indices WHERE requiere_rebuild;
+    SELECT * FROM dba.bitacora_mantenimiento ORDER BY id_operacion;
+    SELECT * FROM dba.config_almacenamiento;        -- umbrales ajustables
+
+Resultados de referencia (corrida de prueba):
+
+- Tras la carga, ningún objeto necesita mantenimiento (tablas con ~0.2 % libre, índices con ~90 % de densidad). La única alerta es `CICLO_DE_VIDA`: la partición del año pasado sigue en `ts_datos`.
+- Con la cuota de `ts_datos` en 30 MB, el tablespace queda en `ALERTA` (97 %). Al mover la partición del año pasado a `ts_historico` baja a 54 % y vuelve a `OK`.
+- Un pago con fecha dos años adelante cae en `nomina_default` y genera alerta. `sp_crear_particiones_futuras(2)` crea la partición de ese año y le mueve la fila, con sus índices, su llave foránea y el trigger de auditoría.
+- La simulación duplica la partición fragmentada (13 → 26 MB de datos y 15 → 31 MB de índices; 49 % de espacio libre; índices con 43–45 % de densidad). El mantenimiento la reconstruye: de 57 MB a 28 MB en total (−51 %) en medio segundo.
+
+Notas técnicas:
+
+- Todo lo hace `admin_empleados`: `dba.espacio_disco` lee el disco con `df` (`COPY ... FROM PROGRAM`, solo superusuario) y `pgstattuple` también requiere privilegios altos.
+- Todas las tablespaces viven en el mismo volumen de Docker, así que el disco libre es el mismo para todas (es el disco virtual de Docker Desktop).
+- Los pasos 4 y 5 del mantenimiento se generan con `\gexec` porque `VACUUM` y `REINDEX CONCURRENTLY` no pueden ejecutarse dentro de una función. `VACUUM FULL` bloquea la partición mientras la reescribe; por eso corre en el horario del job. `REINDEX CONCURRENTLY` no bloquea las consultas.
+- La retención automática viene desactivada: borra datos. Se activa descomentando `MANTENIMIENTO_RETENCION_ANIOS` en `docker-compose.yml`. Para la demostración, el 13 la ejecuta dentro de una transacción que se deshace.
+- Los umbrales se cambian sin tocar código: `UPDATE dba.config_almacenamiento SET valor = ... WHERE clave = ...`.
+
+### Contenedor de mantenimiento automático
+
+`docker compose up -d` también levanta `empleados-mantenimiento`. Espera a que la base acepte conexiones, ejecuta `scripts/15_mantenimiento_automatico.sql` y repite cada `MANTENIMIENTO_INTERVALO_SEG` segundos (86400 = una vez al día). Se conecta por red como `admin_empleados` con la contraseña del `.env`. Si los scripts 12 y 13 todavía no se han ejecutado, lo dice y no hace nada.
+
+    docker logs empleados-mantenimiento                       # ver las corridas
+    docker restart empleados-mantenimiento                    # forzar una corrida ahora
+
+Para la presentación se puede bajar el intervalo (por ejemplo a `"60"`) y volver a ejecutar `docker compose up -d`.
+
 - Convención de documentación: el código va como texto y los resultados como capturas, con figuras numeradas.

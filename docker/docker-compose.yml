@@ -44,6 +44,41 @@ services:
       timeout: 5s
       retries: 5
 
+  # Mantenimiento automático (Fase 4): ejecuta scripts/15_mantenimiento_automatico.sql al arrancar
+  # y luego cada MANTENIMIENTO_INTERVALO_SEG segundos (equivalente a un job de DBMS_SCHEDULER).
+  # Se conecta por red como admin_empleados con la contraseña del .env.
+  mantenimiento:
+    image: postgres:16
+    container_name: empleados-mantenimiento
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - ../.env
+    environment:
+      PGHOST: postgres
+      PGUSER: admin_empleados
+      PGDATABASE: empleados_db
+      MANTENIMIENTO_INTERVALO_SEG: "86400"
+      # Descomentar para activar el truncado automático de los años fuera de la retención:
+      # MANTENIMIENTO_RETENCION_ANIOS: "4"
+    volumes:
+      - ../scripts:/scripts:ro
+    networks:
+      - empleados_network
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        export PGPASSWORD="$$POSTGRES_PASSWORD"
+        until pg_isready -q; do sleep 5; done
+        while true; do
+          echo "=== Mantenimiento automático: $$(date) ==="
+          psql -X -f /scripts/15_mantenimiento_automatico.sql
+          echo "=== Próxima corrida en $$MANTENIMIENTO_INTERVALO_SEG s ==="
+          sleep "$$MANTENIMIENTO_INTERVALO_SEG"
+        done
+
 volumes:
   empleados_pgdata:
   empleados_tablespaces:
